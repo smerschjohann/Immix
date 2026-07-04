@@ -20,6 +20,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.File
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 
@@ -68,7 +69,11 @@ class ApiClient(private val config: ApiClientConfig, externalFilesDir: File? = n
             return apiClient!!.okHttpClient
         }
 
-        val dateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ISO_DATE_TIME;
+        // ISO_DATE_TIME on a zone-less LocalDateTime omits the offset entirely (e.g. "2026-07-04T14:30:00"),
+        // but Immich v3's takenBefore/takenAfter schema requires a mandatory trailing Z/offset
+        // (^...T...(?:Z|[+-]HH:mm)$) - v2 tolerated the offset-less form, v3's stricter validation
+        // rejects it with a 400. Attach the device's zone before formatting so the offset is always present.
+        val dateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
     }
 
     private val okHttpClient = ApiClientFactory.getClient(config.disableSslVerification, config.apiKey, config.debugMode, externalFilesDir)
@@ -143,11 +148,15 @@ class ApiClient(private val config: ApiClientConfig, externalFilesDir: File? = n
             order = order,
             if (includeVideos) null else "IMAGE",
             personIds = personIds,
-            endDate = endDate?.format(dateTimeFormatter),
-            fromDate = fromDate?.format(dateTimeFormatter)
+            endDate = endDate?.atZone(ZoneId.systemDefault())?.format(dateTimeFormatter),
+            fromDate = fromDate?.atZone(ZoneId.systemDefault())?.format(dateTimeFormatter)
         )
         val assetsResult = if (random) {
-            executeAPICall(200) { service.randomAssets(searchRequest) }
+            // RandomSearchDto (POST /search/random) has no `page`/`order` properties at all -
+            // MetadataSearchDto is the only search DTO that supports pagination/ordering. Immich v3's
+            // stricter request validation rejects unknown properties with a 400, so they must be
+            // stripped here rather than sent as on the metadata-search path below.
+            executeAPICall(200) { service.randomAssets(searchRequest.copy(page = null, order = null)) }
         } else {
             executeAPICall(200) { service.listAssets(searchRequest) }.map { res -> res.assets.items }
         }).map { it.filter(excludeByTag()) }
