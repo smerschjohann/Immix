@@ -3,6 +3,9 @@ package nl.giejay.android.tv.immich.api.util
 import arrow.core.Either
 import com.zeuskartik.mediaslider.SliderItemType
 import nl.giejay.android.tv.immich.shared.prefs.PreferenceManager.hostName
+import com.google.gson.Gson
+import nl.giejay.android.tv.immich.api.model.ImmichErrorResponse
+import nl.giejay.android.tv.immich.api.model.toDisplayMessage
 import retrofit2.HttpException
 import retrofit2.Response
 import timber.log.Timber
@@ -38,6 +41,7 @@ object ApiUtil {
     suspend fun <T> executeAPICall(expectedStatus: Int, handler: suspend () -> Response<T>): Either<String, T> {
         try {
             val res = handler()
+            logCorrelationId(res)
             return when (val code = res.code()) {
                 expectedStatus -> {
                     return res.body()?.let { Either.Right(it) }
@@ -54,6 +58,23 @@ object ApiUtil {
         } catch (e: Exception) {
             Timber.e(e, "Could not fetch items, unknown error")
             return Either.Left("Could not fetch data from API, response: ${e.message}")
+        }
+    }
+
+    private fun parseErrorBodySafely(body: String?): ImmichErrorResponse? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            Gson().fromJson(body, ImmichErrorResponse::class.java)
+        } catch (e: Exception) {
+            Timber.w(e, "Could not parse structured error response, falling back to raw message")
+            null
+        }
+    }
+
+    private fun logCorrelationId(res: Response<*>) {
+        val correlationId = res.headers()["X-Correlation-ID"]
+        if (correlationId != null) {
+            Timber.d("X-Correlation-ID: $correlationId")
         }
     }
 }
